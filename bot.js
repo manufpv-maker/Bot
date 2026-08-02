@@ -534,24 +534,39 @@ async function handleMessage(message) {
     // Обработка поиска
     const results = searchPsalm(text, null, lang);
     if (results && results.length > 0) {
-      let responseText = `${t(lang, 'results')}:\n\n`;
-      const keyboard = {
-        inline_keyboard: results.slice(0, 10).map(p => [
-          { text: `${p.collection}${p.actualNumber}: ${p.title}`, callback_data: `psalm_${p.collection}_${p.actualNumber}` }
-        ])
-      };
+      // Wenn nur 1 Ergebnis: direkt anzeigen
+      if (results.length === 1) {
+        const psalm = results[0];
+        const formatted = formatPsalm(psalm.text);
+        const responseText = `<b>${psalm.collection}${psalm.actualNumber}</b>\n${psalm.title}\n\n${formatted}`;
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: t(lang, 'favorite'), callback_data: `fav_${psalm.collection}_${psalm.actualNumber}` }],
+            [{ text: t(lang, 'new_search'), callback_data: 'new_search' }]
+          ]
+        };
+        await sendMessage(chatId, responseText, keyboard);
+      } else {
+        // Mehrere Ergebnisse: Liste anzeigen
+        let responseText = `${t(lang, 'results')}:\n\n`;
+        const keyboard = {
+          inline_keyboard: results.slice(0, 10).map(p => [
+            { text: `${p.collection}${p.actualNumber}: ${p.title}`, callback_data: `psalm_${p.collection}_${p.actualNumber}` }
+          ])
+        };
 
-      if (results.length > 10) {
+        if (results.length > 10) {
+          keyboard.inline_keyboard.push([
+            { text: `➡️ +${results.length - 10} ${t(lang, 'more')}`, callback_data: `search_more_${encodeURIComponent(text)}_0` }
+          ]);
+        }
+
         keyboard.inline_keyboard.push([
-          { text: `➡️ +${results.length - 10} ${t(lang, 'more')}`, callback_data: `search_more_${encodeURIComponent(text)}_0` }
+          { text: t(lang, 'new_search'), callback_data: 'new_search' }
         ]);
+
+        await sendMessage(chatId, responseText, keyboard);
       }
-
-      keyboard.inline_keyboard.push([
-        { text: t(lang, 'new_search'), callback_data: 'new_search' }
-      ]);
-
-      await sendMessage(chatId, responseText, keyboard);
     } else {
       await sendMessage(chatId, t(lang, 'invalid_psalm'));
     }
