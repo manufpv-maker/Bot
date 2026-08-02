@@ -38,7 +38,7 @@ const translations = {
     new_search: '🔍 Новый поиск',
     favorites: '❤️ Избранное',
     language: '🌐 Язык',
-    add_favorite: '❤️ В избранное',
+    add_favorite: '❤️ в избранное',
     remove_favorite: '🤍 Удалить',
     no_favorites: 'Нет избранных псалмов',
     favorite_added: '✅ Добавлено в избранное',
@@ -83,7 +83,7 @@ const translations = {
     new_search: '🔍 Neue Suche',
     favorites: '❤️ Favoriten',
     language: '🌐 Sprache',
-    add_favorite: '❤️ Zu Favoriten',
+    add_favorite: '❤️ в избранное',
     remove_favorite: '🤍 Entfernen',
     no_favorites: 'Keine Lieblingssalmen',
     favorite_added: '✅ Zu Favoriten hinzugefügt',
@@ -128,7 +128,7 @@ const translations = {
     new_search: '🔍 Новий пошук',
     favorites: '❤️ Улюблені',
     language: '🌐 Мова',
-    add_favorite: '❤️ В улюблені',
+    add_favorite: '❤️ в избранное',
     remove_favorite: '🤍 Видалити',
     no_favorites: 'Немає улюблених псалмів',
     favorite_added: '✅ Додано в улюблені',
@@ -498,7 +498,8 @@ async function handleMessage(message) {
         let text = `${t(lang, 'favorites')} (${favorites.length}):\n\n`;
         const keyboard = {
           inline_keyboard: favorites.slice(0, 20).map(p => [
-            { text: `${p.collection}${p.actualNumber}: ${p.title}`, callback_data: `psalm_${p.collection}_${p.actualNumber}` }
+            { text: `${p.collection}${p.actualNumber}: ${p.title}`, callback_data: `psalm_${p.collection}_${p.actualNumber}` },
+            { text: '🗑️', callback_data: `remove_fav_${p.collection}_${p.actualNumber}` }
           ])
         };
         await sendMessage(chatId, text, keyboard);
@@ -746,6 +747,33 @@ async function handleCallbackQuery(query) {
         text: t(lang, 'favorite_added'),
         show_alert: false
       });
+    }
+  } else if (data.startsWith('remove_fav_')) {
+    const match = data.match(/^remove_fav_(.+?)_(\d+)$/);
+    if (!match) return;
+    const collection = match[1];
+    const actualNumber = parseInt(match[2]);
+
+    removeFavorite(userId, `${collection}_${actualNumber}`);
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+      callback_query_id: query.id,
+      text: t(lang, 'favorite_removed'),
+      show_alert: false
+    });
+
+    // Aktualisiere die Favoritenliste
+    const favorites = getFavorites(userId);
+    if (favorites.length === 0) {
+      await editMessage(chatId, messageId, t(lang, 'no_favorites'));
+    } else {
+      let text = `${t(lang, 'favorites')} (${favorites.length}):\n\n`;
+      const keyboard = {
+        inline_keyboard: favorites.slice(0, 20).map(p => [
+          { text: `${p.collection}${p.actualNumber}: ${p.title}`, callback_data: `psalm_${p.collection}_${p.actualNumber}` },
+          { text: '🗑️', callback_data: `remove_fav_${p.collection}_${p.actualNumber}` }
+        ])
+      };
+      await editMessage(chatId, messageId, text, keyboard);
     }
   } else if (data === 'show_favorites') {
     const favorites = getFavorites(userId);
