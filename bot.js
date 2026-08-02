@@ -647,8 +647,11 @@ async function handleCallbackQuery(query) {
     // Pagination für Sammlungen
     const match = data.match(/^coll_more_(.+?)_(\d+)$/);
     if (!match) return;
-    const collection = match[1];
-    const page = parseInt(match[2]) || 0;
+    // Extrahiere collection und page richtig (page ist immer am Ende)
+    const parts = data.replace('coll_more_', '').split('_');
+    const page = parseInt(parts[parts.length - 1]) || 0;
+    const collection = parts.slice(0, -1).join('_');
+    if (!collection) return;
 
     const psalms = psalmsData.filter(p => p.collection === collection).sort((a, b) => a.actualNumber - b.actualNumber);
     const start = 20 + page * 10;
