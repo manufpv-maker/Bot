@@ -634,7 +634,7 @@ async function handleCallbackQuery(query) {
 
     if (psalms.length > 20) {
       keyboard.inline_keyboard.push([
-        { text: `➡️ +${psalms.length - 20}`, callback_data: `coll_more_${collection}_0` }
+        { text: `➡️ +${psalms.length - 20}`, callback_data: `cm_${collection}_0` }
       ]);
     }
 
@@ -643,12 +643,9 @@ async function handleCallbackQuery(query) {
     ]);
 
     await editMessage(chatId, messageId, text, keyboard);
-  } else if (data.startsWith('coll_more_')) {
-    // Pagination für Sammlungen
-    const match = data.match(/^coll_more_(.+?)_(\d+)$/);
-    if (!match) return;
-    // Extrahiere collection und page richtig (page ist immer am Ende)
-    const parts = data.replace('coll_more_', '').split('_');
+  } else if (data.startsWith('cm_')) {
+    // Pagination für Sammlungen (kurze Notation: cm_ statt coll_more_)
+    const parts = data.replace('cm_', '').split('_');
     const page = parseInt(parts[parts.length - 1]) || 0;
     const collection = parts.slice(0, -1).join('_');
     if (!collection) return;
@@ -668,13 +665,13 @@ async function handleCallbackQuery(query) {
 
     if (end < psalms.length) {
       keyboard.inline_keyboard.push([
-        { text: t(lang, 'next'), callback_data: `coll_more_${collection}_${page + 1}` }
+        { text: t(lang, 'next'), callback_data: `cm_${collection}_${page + 1}` }
       ]);
     }
 
     if (page > 0) {
       keyboard.inline_keyboard.push([
-        { text: t(lang, 'prev'), callback_data: `coll_more_${collection}_${page - 1}` }
+        { text: t(lang, 'prev'), callback_data: `cm_${collection}_${page - 1}` }
       ]);
     }
 
