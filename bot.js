@@ -514,13 +514,26 @@ async function handleMessage(message) {
       };
       await sendMessage(chatId, t(lang, 'language'), keyboard);
     } else if (command === '/glavy') {
-      // Alle Sammlungen anzeigen
+      // Alle Sammlungen direkt anzeigen
+      const collections = [
+        { name: collectionsData['п']?.name || 'Песни Юности', abbr: 'п', count: '1-1005' },
+        { name: collectionsData['к']?.name || 'Кувшинчик', abbr: 'к', count: '1-89' },
+        { name: collectionsData['н']?.name || 'Новые псалмы', abbr: 'н', count: '1-217' },
+        { name: collectionsData['г']?.name || 'Горлица', abbr: 'г', count: '1-571' },
+        { name: collectionsData['с']?.name || 'Псалмы Сиона', abbr: 'с', count: '1-525' },
+        { name: collectionsData['м']?.name || 'Мы поём Господу', abbr: 'м', count: '1-200' },
+        { name: collectionsData['юс']?.name || 'Мелодия юных сердец', abbr: 'юс', count: '1-850' },
+        { name: collectionsData['гх']?.name || 'Голосок хваления', abbr: 'гх', count: '1-393' }
+      ];
+
+      let text = `${t(lang, 'all_collections')}:\n\n`;
       const keyboard = {
-        inline_keyboard: [
-          [{ text: t(lang, 'all_collections'), callback_data: 'show_collections' }]
-        ]
+        inline_keyboard: collections.map(c => [
+          { text: `${c.name} (${c.count})`, callback_data: `coll_${c.abbr}` }
+        ])
       };
-      await sendMessage(chatId, t(lang, 'collections_list'), keyboard);
+
+      await sendMessage(chatId, text, keyboard);
     } else if (command === '/admin' && userId === parseInt(ADMIN_CHAT_ID)) {
       const keyboard = {
         inline_keyboard: [
