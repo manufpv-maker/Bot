@@ -518,7 +518,7 @@ async function handleMessage(message) {
       const collections = [
         { name: collectionsData['п']?.name || 'Песни Юности', abbr: 'п', count: '1-1005' },
         { name: collectionsData['к']?.name || 'Кувшинчик', abbr: 'к', count: '1-89' },
-        { name: collectionsData['н']?.name || 'Новые псалмы', abbr: 'н', count: '1-217' },
+
         { name: collectionsData['г']?.name || 'Горлица', abbr: 'г', count: '1-571' },
         { name: collectionsData['с']?.name || 'Псалмы Сиона', abbr: 'с', count: '1-525' },
         { name: collectionsData['м']?.name || 'Мы поём Господу', abbr: 'м', count: '1-200' },
