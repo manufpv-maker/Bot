@@ -535,7 +535,7 @@ function psalmKeyboard(userId, lang, psalm) {
     ]
   ];
   if (nav.length) rows.push(nav);
-  rows.push([{ text: t(lang, 'open_in_app'), web_app: { url: `${MINIAPP_URL}/#${COLLECTION_FILES[psalm.collection]}${psalm.actualNumber}` } }]);
+  rows.push([{ text: t(lang, 'open_in_app'), web_app: { url: `${MINIAPP_URL}/?p=${COLLECTION_FILES[psalm.collection]}${psalm.actualNumber}` } }]);
   rows.push([{ text: t(lang, 'new_search'), callback_data: 'new_search' }]);
   return { inline_keyboard: rows };
 }
@@ -580,7 +580,8 @@ async function getFolders(fresh = false) {
   if (!fresh && foldersCache.data && Date.now() - foldersCache.at < 10000) return foldersCache.data.folders;
   return (await folderApi('get')).folders;
 }
-const folderUrl = id => `${MINIAPP_URL}/#${id}`;
+// Telegram replaces the #hash of a web_app URL with its own launch data, so deep links use the query.
+const folderUrl = id => `${MINIAPP_URL}/?f=${encodeURIComponent(id)}`;
 
 async function showFolders(chatId, lang, messageId = null) {
   let folders;
