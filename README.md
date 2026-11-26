@@ -1,6 +1,6 @@
 # Psalmen-Bot (Telegram)
 
-Telegram-Bot zum Sammelband: Suche, Sammlungen, Favoriten, gemeinsame Ordner und Freigabe neuer Nutzer durch den Admin.
+Telegram-Bot zum Sammelband (nur Russisch): Suche, Sammlungen, Favoriten, gemeinsame Ordner und Freigabe neuer Nutzer durch den Admin.
 
 ## Funktionen
 - Suche nach Nummer (`5` = Песни Юности), Code (`н5`, `юс 120`), Titel, erster Zeile und im ganzen Text
@@ -14,7 +14,7 @@ Telegram-Bot zum Sammelband: Suche, Sammlungen, Favoriten, gemeinsame Ordner und
 | `TELEGRAM_BOT_TOKEN` | Bot-Token |
 | `ADMIN_CHAT_ID` | Telegram-ID des Admins |
 | `ADMIN_TOKEN` | Token für die Admin-API |
-| `DATA_DIR` | Ordner für `access.json`, `favorites.json`, `prefs.json` – auf Railway ein Volume (z. B. `/data`), sonst gehen Freigaben bei jedem Deploy verloren |
+| `DATA_DIR` | Ordner für `access.json`, `favorites.json` – auf Railway ein Volume (z. B. `/data`), sonst gehen Freigaben bei jedem Deploy verloren |
 | `ACCESS_DATA` | optional: Startwert für `access.json`, wird nur genutzt, solange die Datei noch nicht existiert |
 | `MINIAPP_URL` | Adresse der Website (Standard: die Railway-Adresse der MiniApp) |
 

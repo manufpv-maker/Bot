@@ -18,7 +18,6 @@ const TELEGRAM_API = `${TELEGRAM_API_BASE}/bot${TELEGRAM_BOT_TOKEN}`;
 const DATA_DIR = process.env.DATA_DIR || '.';
 const ACCESS_FILE = path.join(DATA_DIR, 'access.json');
 const FAVORITES_FILE = path.join(DATA_DIR, 'favorites.json');
-const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
 // The website (Mini App) hosts the shared folders; the bot reads and edits them through its API.
 const MINIAPP_URL = (process.env.MINIAPP_URL || 'https://miniapp-production-538c.up.railway.app').replace(/\/$/, '');
 
@@ -33,19 +32,17 @@ let collectionsData = {};
 let accessData = { users: {}, tokens: {} };
 let favoritesData = {};
 let userState = {};
-let userLanguage = {};
 
 // Sprach-Strings
 const translations = {
   ru: {
     welcome: '🙏 Добро пожаловать в Сборник Псалмов!',
     search_help: 'Как искать:\n• Введите номер: <code>5</code>\n• Введите название: <code>Радость</code>\n• Введите код сборника + номер: <code>п5</code>, <code>к10</code>',
-    commands: 'Команды:\n/start - Начало\n/help - Справка\n/papki - Общие папки\n/favorites - Избранное\n/language - Язык\n/glavy - Все сборники',
+    commands: 'Команды:\n/start - Начало\n/help - Справка\n/papki - Общие папки\n/favorites - Избранное\n/glavy - Все сборники',
     all_collections: '📚 Все сборники',
     search_placeholder: '🔍 Введите номер, название или код сборника',
     new_search: '🔍 Новый поиск',
     favorites: '❤️ Избранное',
-    language: '🌐 Язык',
     add_favorite: '❤️ в избранное',
     remove_favorite: '🤍 Удалить',
     no_favorites: 'Нет избранных псалмов',
@@ -80,7 +77,6 @@ const translations = {
     error: 'Ошибка',
     invalid_psalm: 'Псалом не найден',
     collections_list: 'Поддерживаемые сборники',
-    language_selected: 'Язык выбран',
     open_app: '📖 Открыть сборник',
     open_in_app: '📖 Открыть в приложении',
     folders: '📁 Общие папки',
@@ -109,96 +105,6 @@ const translations = {
     reorder_hint: 'Порядок псалмов можно менять на сайте.',
     prev_psalm: '◀️',
     next_psalm: '▶️'
-  },
-  de: {
-    welcome: '🙏 Willkommen zur Psalmensammlung!',
-    search_help: 'So suchen Sie:\n• Geben Sie eine Nummer ein: <code>5</code>\n• Geben Sie einen Titel ein: <code>Freude</code>\n• Geben Sie einen Sammlungscode + Nummer ein: <code>п5</code>, <code>к10</code>',
-    commands: 'Befehle:\n/start - Start\n/help - Hilfe\n/favorites - Favoriten\n/language - Sprache\n/glavy - Alle Sammlungen',
-    all_collections: '📚 Alle Sammlungen',
-    search_placeholder: '🔍 Geben Sie eine Nummer, einen Titel oder einen Sammlungscode ein',
-    new_search: '🔍 Neue Suche',
-    favorites: '❤️ Favoriten',
-    language: '🌐 Sprache',
-    add_favorite: '❤️ в избранное',
-    remove_favorite: '🤍 Entfernen',
-    no_favorites: 'Keine Lieblingssalmen',
-    favorite_added: '✅ Zu Favoriten hinzugefügt',
-    favorite_removed: '✅ Aus Favoriten entfernt',
-    results: 'Ergebnisse',
-    page: 'Seite',
-    next: '➡️ Weiter',
-    prev: '⬅️ Zurück',
-    back: '🔙 Zurück',
-    more: 'mehr',
-    admin_panel: '🛡️ Admin-Panel',
-    users: '👥 Benutzer',
-    pending: '⏳ Ausstehend',
-    statistics: '📊 Statistik',
-    approved: '✅ Genehmigt',
-    denied: '❌ Abgelehnt',
-    blocked: '🚫 Blockiert',
-    total: '📊 Gesamt',
-    welcome_approved: '🙏 Willkommen zur Psalmensammlung!',
-    not_approved: 'Dies ist ein Bot mit allen unseren Psalmen. Ihr Antrag wurde eingereicht und wird so schnell wie möglich bearbeitet',
-    new_request: '🔔 Neuer Zugriffsantrag',
-    approve: '✅ Genehmigen',
-    deny: '❌ Ablehnen',
-    request_denied: '❌ Ihr Antrag wurde abgelehnt.',
-    approved_text: '✅ Genehmigt',
-    denied_text: '❌ Antrag abgelehnt',
-    user_not_found: 'Benutzer nicht gefunden',
-    invalid_token: 'Ungültiger Admin-Token',
-    user_id_required: 'Benutzer-ID erforderlich',
-    success: 'Erfolg',
-    error: 'Fehler',
-    invalid_psalm: 'Psalm nicht gefunden',
-    collections_list: 'Unterstützte Sammlungen',
-    language_selected: 'Sprache ausgewählt'
-  },
-  ua: {
-    welcome: '🙏 Ласкаво просимо до Збірки Псалмів!',
-    search_help: 'Як шукати:\n• Введіть номер: <code>5</code>\n• Введіть назву: <code>Радість</code>\n• Введіть код збірки + номер: <code>п5</code>, <code>к10</code>',
-    commands: 'Команди:\n/start - Початок\n/help - Довідка\n/favorites - Улюблені\n/language - Мова\n/glavy - Усі збірки',
-    all_collections: '📚 Усі збірки',
-    search_placeholder: '🔍 Введіть номер, назву або код збірки',
-    new_search: '🔍 Новий пошук',
-    favorites: '❤️ Улюблені',
-    language: '🌐 Мова',
-    add_favorite: '❤️ в избранное',
-    remove_favorite: '🤍 Видалити',
-    no_favorites: 'Немає улюблених псалмів',
-    favorite_added: '✅ Додано в улюблені',
-    favorite_removed: '✅ Видалено з улюблених',
-    results: 'Результати',
-    page: 'сторінка',
-    next: '➡️ Далі',
-    prev: '⬅️ Назад',
-    back: '🔙 Назад',
-    more: 'ще',
-    admin_panel: '🛡️ Адмін-панель',
-    users: '👥 Користувачі',
-    pending: '⏳ Очікування',
-    statistics: '📊 Статистика',
-    approved: '✅ Схвалено',
-    denied: '❌ Відхилено',
-    blocked: '🚫 Заблоковано',
-    total: '📊 Всього',
-    welcome_approved: '🙏 Ласкаво просимо до Збірки Псалмів!',
-    not_approved: 'Це бот з усіма нашими псалмами, ваш запит прийнятий і буде оброблений якнайшвидше',
-    new_request: '🔔 Новий запит на доступ',
-    approve: '✅ Схвалити',
-    deny: '❌ Відхилити',
-    request_denied: '❌ Ваш запит був відхилений.',
-    approved_text: '✅ Схвалено',
-    denied_text: '❌ Запит відхилено',
-    user_not_found: 'Користувача не знайдено',
-    invalid_token: 'Невірний токен адміна',
-    user_id_required: 'Потрібен ID користувача',
-    success: 'Успіх',
-    error: 'Помилка',
-    invalid_psalm: 'Псалом не знайдений',
-    collections_list: 'Підтримувані збірки',
-    language_selected: 'Мова вибрана'
   }
 };
 
@@ -301,22 +207,6 @@ function saveAccessData() {
     writeJSON(ACCESS_FILE, accessData);
   } catch (err) {
     console.error('❌ Fehler beim Speichern der Zugriffsdaten:', err.message);
-  }
-}
-
-function loadPrefs() {
-  try {
-    if (fs.existsSync(PREFS_FILE)) userLanguage = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf-8')).language || {};
-  } catch (err) {
-    console.error('❌ Fehler beim Laden der Einstellungen:', err.message);
-  }
-}
-
-function savePrefs() {
-  try {
-    writeJSON(PREFS_FILE, { language: userLanguage });
-  } catch (err) {
-    console.error('❌ Fehler beim Speichern der Einstellungen:', err.message);
   }
 }
 
@@ -679,10 +569,7 @@ async function handleMessage(message) {
   const userId = message.from.id;
   const text = message.text || '';
 
-  if (!userLanguage[userId]) {
-    userLanguage[userId] = 'ru';
-  }
-  const lang = userLanguage[userId];
+  const lang = 'ru';
 
   const firstWord = text.split(' ')[0].split('@')[0];
   if (!canUseBot(userId) && firstWord !== '/start') {
@@ -731,8 +618,7 @@ async function handleMessage(message) {
           inline_keyboard: [
             [{ text: t(lang, 'open_app'), web_app: { url: MINIAPP_URL } }],
             [{ text: t(lang, 'all_collections'), callback_data: 'show_collections' }],
-            [{ text: t(lang, 'folders'), callback_data: 'folders' }, { text: t(lang, 'favorites'), callback_data: 'show_favorites' }],
-            [{ text: t(lang, 'language'), callback_data: 'select_language' }]
+            [{ text: t(lang, 'folders'), callback_data: 'folders' }, { text: t(lang, 'favorites'), callback_data: 'show_favorites' }]
           ]
         };
 
@@ -755,15 +641,6 @@ async function handleMessage(message) {
         };
         await sendMessage(chatId, text, keyboard);
       }
-    } else if (command === '/language') {
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: '🇷🇺 Русский', callback_data: 'lang_ru' }],
-          [{ text: '🇩🇪 Deutsch', callback_data: 'lang_de' }],
-          [{ text: '🇺🇦 Українська', callback_data: 'lang_ua' }]
-        ]
-      };
-      await sendMessage(chatId, t(lang, 'language'), keyboard);
     } else if (command === '/glavy') {
       // Alle Sammlungen direkt anzeigen
       const collections = collectionsList();
@@ -829,14 +706,11 @@ async function handleCallbackQuery(query) {
   const userId = query.from.id;
   const data = query.data;
 
-  if (!userLanguage[userId]) {
-    userLanguage[userId] = 'ru';
-  }
-  const lang = userLanguage[userId];
+  const lang = 'ru';
 
   const adminAction = /^(approve_|deny_|block_|unblock_|admin_)/.test(data);
   if (adminAction && !isAdmin(userId)) return;
-  if (!adminAction && !canUseBot(userId) && !/^(lang_|select_language$)/.test(data)) {
+  if (!adminAction && !canUseBot(userId)) {
     await answerCallback(query.id, t(lang, 'not_approved'));
     return;
   }
@@ -1028,24 +902,6 @@ async function handleCallbackQuery(query) {
       };
       await editMessage(chatId, messageId, text, keyboard);
     }
-  } else if (data === 'select_language') {
-    const keyboard = {
-      inline_keyboard: [
-        [{ text: '🇷🇺 Русский', callback_data: 'lang_ru' }],
-        [{ text: '🇩🇪 Deutsch', callback_data: 'lang_de' }],
-        [{ text: '🇺🇦 Українська', callback_data: 'lang_ua' }]
-      ]
-    };
-    await editMessage(chatId, messageId, t(lang, 'language'), keyboard);
-  } else if (data.startsWith('lang_')) {
-    const newLang = data.replace('lang_', '');
-    userLanguage[userId] = newLang;
-    savePrefs();
-    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-      callback_query_id: query.id,
-      text: t(newLang, 'language_selected'),
-      show_alert: false
-    });
   } else if (data === 'folders') {
     await showFolders(chatId, lang, messageId);
   } else if (data.startsWith('fo_')) {
@@ -1396,7 +1252,6 @@ app.listen(PORT, async () => {
   loadPsalms();
   loadAccessData();
   loadFavorites();
-  loadPrefs();
   console.log(`💾 Daten in ${path.resolve(DATA_DIR)}`);
 
   try {
@@ -1406,8 +1261,7 @@ app.listen(PORT, async () => {
         { command: 'papki', description: 'Общие папки' },
         { command: 'favorites', description: 'Избранное' },
         { command: 'glavy', description: 'Все сборники' },
-        { command: 'help', description: 'Справка' },
-        { command: 'language', description: 'Язык' }
+        { command: 'help', description: 'Справка' }
       ]
     });
   } catch (err) {
