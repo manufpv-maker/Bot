@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
+const zlib = require('zlib');
 
 // ============================================================================
 // KONFIGURATION
@@ -10,9 +12,15 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID ? String(process.env.ADMIN_CHAT_ID).trim() : null;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ? String(process.env.ADMIN_TOKEN).trim() : '';
 
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
-const ACCESS_FILE = './access.json';
-const FAVORITES_FILE = './favorites.json';
+const TELEGRAM_API_BASE = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
+const TELEGRAM_API = `${TELEGRAM_API_BASE}/bot${TELEGRAM_BOT_TOKEN}`;
+// Persistent data lives on a Railway volume (DATA_DIR), so approvals and favorites survive redeploys.
+const DATA_DIR = process.env.DATA_DIR || '.';
+const ACCESS_FILE = path.join(DATA_DIR, 'access.json');
+const FAVORITES_FILE = path.join(DATA_DIR, 'favorites.json');
+const PREFS_FILE = path.join(DATA_DIR, 'prefs.json');
+// The website (Mini App) hosts the shared folders; the bot reads and edits them through its API.
+const MINIAPP_URL = (process.env.MINIAPP_URL || 'https://miniapp-production-538c.up.railway.app').replace(/\/$/, '');
 
 const app = express();
 app.use(express.json());
@@ -32,7 +40,7 @@ const translations = {
   ru: {
     welcome: '🙏 Добро пожаловать в Сборник Псалмов!',
     search_help: 'Как искать:\n• Введите номер: <code>5</code>\n• Введите название: <code>Радость</code>\n• Введите код сборника + номер: <code>п5</code>, <code>к10</code>',
-    commands: 'Команды:\n/start - Начало\n/help - Справка\n/favorites - Избранное\n/language - Язык\n/glavy - Все сборники',
+    commands: 'Команды:\n/start - Начало\n/help - Справка\n/papki - Общие папки\n/favorites - Избранное\n/language - Язык\n/glavy - Все сборники',
     all_collections: '📚 Все сборники',
     search_placeholder: '🔍 Введите номер, название или код сборника',
     new_search: '🔍 Новый поиск',
@@ -72,7 +80,35 @@ const translations = {
     error: 'Ошибка',
     invalid_psalm: 'Псалом не найден',
     collections_list: 'Поддерживаемые сборники',
-    language_selected: 'Язык выбран'
+    language_selected: 'Язык выбран',
+    open_app: '📖 Открыть сборник',
+    open_in_app: '📖 Открыть в приложении',
+    folders: '📁 Общие папки',
+    to_folder: '📁 В папку',
+    new_folder: '➕ Новая папка',
+    folders_intro: 'Общие папки видят и могут менять все пользователи — и в боте, и на сайте.',
+    no_folders: 'Папок пока нет. Создайте первую!',
+    folder_empty: 'Папка пустая. Откройте псалом и нажмите «📁 В папку».',
+    choose_folder: 'Выберите папки для',
+    ask_folder_name: '✏️ Напишите название новой папки (например: Вечернее).\n\n/cancel — отмена',
+    ask_rename: '✏️ Напишите новое название для папки',
+    folder_created: '✅ Папка создана',
+    folder_renamed: '✅ Папка переименована',
+    folder_deleted: '🗑 Папка удалена. Её можно восстановить на сайте в разделе «Недавно удалённые» (30 дней).',
+    confirm_delete: 'Удалить папку? Она исчезнет у всех пользователей.',
+    yes_delete: '🗑 Да, удалить',
+    cancel: 'Отмена',
+    rename: '✏️ Переименовать',
+    delete: '🗑 Удалить',
+    all_folders: '📁 Все папки',
+    open_site: '🌐 Открыть на сайте',
+    folders_error: '⚠️ Папки сейчас недоступны. Попробуйте через минуту.',
+    added_to: '✅ Добавлено в',
+    removed_from: '✅ Убрано из',
+    cancelled: 'Отменено',
+    reorder_hint: 'Порядок псалмов можно менять на сайте.',
+    prev_psalm: '◀️',
+    next_psalm: '▶️'
   },
   de: {
     welcome: '🙏 Willkommen zur Psalmensammlung!',
@@ -173,30 +209,31 @@ function t(lang, key) {
 // ============================================================================
 // DATEN LADEN
 // ============================================================================
+const COLLECTION_FILES = { 'к': 'k', 'н': 'n', 'г': 'g', 'п': 'p', 'с': 's', 'м': 'm', 'юс': 'ys', 'гх': 'gh' };
+const COLLECTION_ORDER = Object.keys(COLLECTION_FILES);
+const DEFAULT_COLLECTIONS = {
+  'п': { name: 'Песни Юности' }, 'к': { name: 'Кувшинчик' }, 'н': { name: 'Новые псалмы' }, 'г': { name: 'Горлица' },
+  'с': { name: 'Псалмы Сиона' }, 'м': { name: 'Мы поём Господу' }, 'юс': { name: 'Мелодия юных сердец' }, 'гх': { name: 'Голосок хваления' }
+};
+let psalmByKey = new Map();
+
+// Same texts as the website: data/index.json.gz (number, title, first line) + one file per collection.
 function loadPsalms() {
   try {
-    const data = JSON.parse(fs.readFileSync('./psalms-data.json', 'utf-8'));
-    psalmsData = Array.isArray(data) ? data : (data.psalms || []);
+    const gz = f => JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'data', f))));
+    const index = gz('index.json.gz');
+    const texts = {};
+    for (const [c, file] of Object.entries(COLLECTION_FILES)) texts[c] = gz(`${file}.json.gz`);
+    psalmsData = index.map(([c, n, title, firstLine, subtitle]) => ({
+      collection: c, actualNumber: n, number: n, id: c + n, title, firstLine, subtitle: subtitle || '', text: texts[c][n] || ''
+    }));
+    psalmByKey = new Map(psalmsData.map(p => [p.id, p]));
     console.log(`✅ ${psalmsData.length} Psalmen geladen`);
-    
-    // Lade collectionsData aus psalms-data-extended.json
     try {
-      const extendedData = JSON.parse(fs.readFileSync('./psalms-data-extended.json', 'utf-8'));
-      collectionsData = extendedData.collections || {};
-      console.log('✅ Sammlungsmetadaten geladen');
+      const extendedData = JSON.parse(fs.readFileSync(path.join(__dirname, 'psalms-data-extended.json'), 'utf-8'));
+      collectionsData = Object.assign({}, DEFAULT_COLLECTIONS, extendedData.collections || {});
     } catch (err) {
-      console.warn('⚠️ psalms-data-extended.json nicht gefunden, verwende Defaults');
-      // Defaults für Sammlungen
-      collectionsData = {
-        'п': { name: 'Песни Юности', name_de: 'Lieder der Jugend', name_ua: 'Пісні Юності' },
-        'к': { name: 'Кувшинчик', name_de: 'Kännchen', name_ua: 'Кувшинчик' },
-        'н': { name: 'Новые псалмы', name_de: 'Neue Psalmen', name_ua: 'Нові псалми' },
-        'г': { name: 'Горлица', name_de: 'Taube', name_ua: 'Горлиця' },
-        'с': { name: 'Псалмы Сиона', name_de: 'Psalmen Zions', name_ua: 'Псалми Сіону' },
-        'м': { name: 'Мы поём Господу', name_de: 'Wir singen dem Herrn', name_ua: 'Ми поємо Господу' },
-        'юс': { name: 'Мелодия юных сердец', name_de: 'Melodie junger Herzen', name_ua: 'Мелодія молодих сердець' },
-        'гх': { name: 'Голосок хваления', name_de: 'Stimme des Lobes', name_ua: 'Голосок хвалення' }
-      };
+      collectionsData = DEFAULT_COLLECTIONS;
     }
   } catch (err) {
     console.error('❌ Fehler beim Laden der Psalmen:', err.message);
@@ -204,12 +241,27 @@ function loadPsalms() {
   }
 }
 
+function writeJSON(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  fs.renameSync(tmp, file);
+}
+
 function loadAccessData() {
   try {
+    if (fs.existsSync(ACCESS_FILE)) {
+      accessData = JSON.parse(fs.readFileSync(ACCESS_FILE, 'utf-8'));
+      accessData.users = accessData.users || {};
+      accessData.tokens = accessData.tokens || {};
+      console.log(`✅ Zugriffsdaten aus Datei geladen (${Object.keys(accessData.users).length} Nutzer)`);
+      return;
+    }
     if (process.env.ACCESS_DATA) {
       try {
         accessData = JSON.parse(process.env.ACCESS_DATA);
-        console.log('✅ Zugriffsdaten aus Umgebung geladen');
+        console.log('✅ Zugriffsdaten aus Umgebung geladen (Startwert für die Datei)');
+        saveAccessData();
         return;
       } catch (e) {
         console.warn('⚠️ Fehler beim Parsen von ACCESS_DATA aus Umgebung');
@@ -238,7 +290,7 @@ function loadFavorites() {
 
 function saveFavorites() {
   try {
-    fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favoritesData, null, 2));
+    writeJSON(FAVORITES_FILE, favoritesData);
   } catch (err) {
     console.error('❌ Fehler beim Speichern der Favoriten:', err.message);
   }
@@ -246,9 +298,25 @@ function saveFavorites() {
 
 function saveAccessData() {
   try {
-    fs.writeFileSync(ACCESS_FILE, JSON.stringify(accessData, null, 2));
+    writeJSON(ACCESS_FILE, accessData);
   } catch (err) {
     console.error('❌ Fehler beim Speichern der Zugriffsdaten:', err.message);
+  }
+}
+
+function loadPrefs() {
+  try {
+    if (fs.existsSync(PREFS_FILE)) userLanguage = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf-8')).language || {};
+  } catch (err) {
+    console.error('❌ Fehler beim Laden der Einstellungen:', err.message);
+  }
+}
+
+function savePrefs() {
+  try {
+    writeJSON(PREFS_FILE, { language: userLanguage });
+  } catch (err) {
+    console.error('❌ Fehler beim Speichern der Einstellungen:', err.message);
   }
 }
 
@@ -312,10 +380,12 @@ function hasAccess(userId) {
 // ============================================================================
 // SUCHFUNKTION
 // ============================================================================
+const norm = str => String(str || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
 function searchPsalm(query, collection = null, lang = 'ru') {
   if (!query || query.trim().length === 0) return null;
 
-  const normalized = query.toLowerCase().trim();
+  const normalized = query.toLowerCase().replace(/ё/g, 'е').trim();
 
   // Typ 1: Nur Nummer
   if (/^\d+$/.test(normalized)) {
@@ -325,19 +395,34 @@ function searchPsalm(query, collection = null, lang = 'ru') {
   }
 
   // Typ 2: Abkürzung + Nummer (z.B. п5, к10, гх80)
-  const abbrevMatch = normalized.match(/^([а-яюёжш]+)\s*(\d+)$/);
+  const abbrevMatch = normalized.match(/^(юс|гх|к|н|г|п|с|м)\s*(\d+)$/);
   if (abbrevMatch) {
     const [, abbr, num] = abbrevMatch;
     return psalmsData.filter(p => p.actualNumber === parseInt(num) && p.collection === abbr);
   }
 
-  // Typ 3: Suche nach Namen (Priorität auf Titel)
-  const results = psalmsData.filter(p => {
-    const titleField = (p.title || '').toLowerCase();
-    return titleField.includes(normalized);
-  });
-
+  // Typ 3: Titel, dann erste Zeile, dann der ganze Text
+  const q = norm(query);
+  if (!q) return null;
+  const words = q.split(' ');
+  const has = s => { const n = norm(s); return words.every(w => n.includes(w)); };
+  const byTitle = psalmsData.filter(p => has(p.title));
+  const byFirst = psalmsData.filter(p => !byTitle.includes(p) && has(p.firstLine));
+  const results = byTitle.concat(byFirst);
+  if (results.length < 10) {
+    for (const p of psalmsData) {
+      if (results.length >= 60) break;
+      if (!results.includes(p) && has(p.text)) results.push(p);
+    }
+  }
   return results.length > 0 ? results : null;
+}
+
+function collectionsList() {
+  return COLLECTION_ORDER.map(abbr => {
+    const count = psalmsData.filter(p => p.collection === abbr).length;
+    return { name: collectionsData[abbr]?.name || DEFAULT_COLLECTIONS[abbr].name, abbr, count: `1-${count}` };
+  });
 }
 
 // ============================================================================
@@ -358,48 +443,93 @@ async function sendMessage(chatId, text, keyboard = null) {
   }
 }
 
+const esc = str => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Psalm text → Telegram HTML: header line dropped, blank line between parts, chorus in italics.
 function formatPsalm(text) {
-  let lines = text.split('\n');
-  let formatted = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    if (line.startsWith('Псалом')) continue;
-    
-    if (/^\d+\./.test(line) && formatted.length > 0) {
-      formatted.push('');
-    }
-    
-    if (line.startsWith('Пр.:') && formatted.length > 0) {
-      formatted.push('');
-    }
-    
-    formatted.push(line);
+  let lines = String(text || '').replace(/\r/g, '').split('\n');
+  while (lines.length && (!lines[0].trim() || /^\s*Мы по[её]м Господу\s*\d+\s*$/i.test(lines[0]) || /^\s*псалом\s+\S+\s*$/i.test(lines[0]))) lines.shift();
+  if (lines.length && /^\s*[А-ЯЁа-яё]{1,2}\s*\d+\s*\.?/.test(lines[0])) lines.shift();
+  const blocks = [];
+  let cur = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { cur = null; continue; }
+    const isChorus = /^(пр|припев|хор|рефрен)\s*[.:]+/i.test(line);
+    if (!cur || /^\d+\s*[.)]\s*\S/.test(line) || isChorus) { cur = { chorus: isChorus, lines: [] }; blocks.push(cur); }
+    cur.lines.push(line);
   }
-  
-  return formatted.join('\n');
+  return blocks.map(b => {
+    const body = b.lines.map(esc).join('\n');
+    return b.chorus ? `<i>${body}</i>` : body;
+  }).join('\n\n');
+}
+
+// Telegram allows 4096 characters per message; long psalms are split at blank lines.
+function splitMessage(text, limit = 3900) {
+  if (text.length <= limit) return [text];
+  const parts = [];
+  let cur = '';
+  for (const block of text.split('\n\n')) {
+    const add = (cur ? '\n\n' : '') + block;
+    if (cur && cur.length + add.length > limit) { parts.push(cur); cur = block; } else cur += add;
+  }
+  if (cur) parts.push(cur);
+  return parts.flatMap(p => p.length <= limit ? [p] : p.match(new RegExp(`[\\s\\S]{1,${limit}}`, 'g')));
 }
 
 async function sendPsalm(chatId, text, keyboard = null, collection = null, actualNumber = null) {
   try {
+    const psalm = psalmByKey.get(`${collection}${actualNumber}`);
     let formattedText = formatPsalm(text);
-    
     if (collection && actualNumber) {
-      formattedText = `<b>${collection}${actualNumber}</b>\n\n${formattedText}`;
+      const name = collectionsData[collection]?.name || '';
+      const head = `<b>${esc(collection.toUpperCase() + actualNumber)}. ${esc(psalm ? psalm.title : '')}</b>\n<i>${esc(name)}</i>` + (psalm && psalm.subtitle ? `\n<i>${esc(psalm.subtitle)}</i>` : '');
+      formattedText = `${head}\n\n${formattedText}`;
     }
-    
-    const payload = {
-      chat_id: chatId,
-      text: formattedText,
-      parse_mode: 'HTML'
-    };
-    if (keyboard) payload.reply_markup = keyboard;
-    
-    await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+    const parts = splitMessage(formattedText);
+    for (let i = 0; i < parts.length; i++) {
+      const payload = { chat_id: chatId, text: parts[i], parse_mode: 'HTML' };
+      if (keyboard && i === parts.length - 1) payload.reply_markup = keyboard;
+      await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+    }
   } catch (err) {
-    console.error('❌ Fehler beim Senden des Psalms:', err.message);
+    console.error('❌ Fehler beim Senden des Psalms:', err.response?.data?.description || err.message);
   }
+}
+
+function psalmNeighbors(psalm) {
+  const list = psalmsData.filter(p => p.collection === psalm.collection);
+  const i = list.indexOf(psalm);
+  return [list[i - 1], list[i + 1]];
+}
+
+function psalmKeyboard(userId, lang, psalm) {
+  const isFav = isFavorite(userId, psalm.collection, psalm.actualNumber);
+  const [prev, next] = psalmNeighbors(psalm);
+  const nav = [];
+  if (prev) nav.push({ text: `◀️ ${prev.collection}${prev.actualNumber}`, callback_data: `psalm_${prev.collection}_${prev.actualNumber}` });
+  if (next) nav.push({ text: `${next.collection}${next.actualNumber} ▶️`, callback_data: `psalm_${next.collection}_${next.actualNumber}` });
+  const rows = [
+    [
+      { text: isFav ? t(lang, 'remove_favorite') : t(lang, 'add_favorite'), callback_data: `fav_${psalm.collection}_${psalm.actualNumber}` },
+      { text: t(lang, 'to_folder'), callback_data: `fa_${psalm.collection}_${psalm.actualNumber}` }
+    ]
+  ];
+  if (nav.length) rows.push(nav);
+  rows.push([{ text: t(lang, 'open_in_app'), web_app: { url: `${MINIAPP_URL}/#${COLLECTION_FILES[psalm.collection]}${psalm.actualNumber}` } }]);
+  rows.push([{ text: t(lang, 'new_search'), callback_data: 'new_search' }]);
+  return { inline_keyboard: rows };
+}
+
+async function showPsalm(chatId, userId, lang, psalm) {
+  await sendPsalm(chatId, psalm.text, psalmKeyboard(userId, lang, psalm), psalm.collection, psalm.actualNumber);
+}
+
+async function answerCallback(queryId, text) {
+  try {
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: queryId, text: text || undefined, show_alert: false });
+  } catch (err) { /* already answered */ }
 }
 
 async function editMessage(chatId, messageId, text, keyboard = null) {
@@ -415,6 +545,80 @@ async function editMessage(chatId, messageId, text, keyboard = null) {
     await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
   } catch (err) {
     console.error('❌ Fehler beim Bearbeiten der Nachricht:', err.message);
+  }
+}
+
+// ============================================================================
+// GEMEINSAME ORDNER (gespeichert auf dem Website-Server)
+// ============================================================================
+let foldersCache = { at: 0, data: null };
+async function folderApi(method, url = '', body) {
+  const res = await axios({ method, url: `${MINIAPP_URL}/api/folders${url}`, data: body, timeout: 20000, validateStatus: () => true });
+  if (res.data && Array.isArray(res.data.folders)) foldersCache = { at: Date.now(), data: res.data };
+  if (res.status >= 400) throw new Error(res.data?.error || `HTTP ${res.status}`);
+  return res.data;
+}
+async function getFolders(fresh = false) {
+  if (!fresh && foldersCache.data && Date.now() - foldersCache.at < 10000) return foldersCache.data.folders;
+  return (await folderApi('get')).folders;
+}
+const folderUrl = id => `${MINIAPP_URL}/#${id}`;
+
+async function showFolders(chatId, lang, messageId = null) {
+  let folders;
+  try { folders = await getFolders(true); } catch (e) { return messageId ? editMessage(chatId, messageId, t(lang, 'folders_error')) : sendMessage(chatId, t(lang, 'folders_error')); }
+  const text = `<b>${t(lang, 'folders')}</b> (${folders.length})\n\n${t(lang, 'folders_intro')}` + (folders.length ? '' : `\n\n${t(lang, 'no_folders')}`);
+  const keyboard = { inline_keyboard: folders.slice(0, 40).map(f => [{ text: `📁 ${f.name} · ${f.items.length}`, callback_data: `fo_${f.id}` }]) };
+  keyboard.inline_keyboard.push([{ text: t(lang, 'new_folder'), callback_data: 'fn' }]);
+  keyboard.inline_keyboard.push([{ text: t(lang, 'open_site'), web_app: { url: MINIAPP_URL } }]);
+  return messageId ? editMessage(chatId, messageId, text, keyboard) : sendMessage(chatId, text, keyboard);
+}
+
+async function showFolder(chatId, lang, id, messageId = null) {
+  let folders;
+  try { folders = await getFolders(true); } catch (e) { return editMessage(chatId, messageId, t(lang, 'folders_error')); }
+  const f = folders.find(x => x.id === id);
+  if (!f) return showFolders(chatId, lang, messageId);
+  const psalms = f.items.map(k => psalmByKey.get(k)).filter(Boolean);
+  let text = `📁 <b>${esc(f.name)}</b> · ${psalms.length}\n\n`;
+  text += psalms.length ? psalms.map((p, i) => `${i + 1}. <b>${esc(p.collection.toUpperCase() + p.actualNumber)}</b> ${esc(p.title)}`).join('\n') : t(lang, 'folder_empty');
+  if (psalms.length > 1) text += `\n\n<i>${t(lang, 'reorder_hint')}</i>`;
+  const keyboard = { inline_keyboard: psalms.slice(0, 40).map((p, i) => [{ text: `${i + 1}. ${p.collection}${p.actualNumber}: ${p.title}`, callback_data: `psalm_${p.collection}_${p.actualNumber}` }]) };
+  keyboard.inline_keyboard.push([{ text: t(lang, 'rename'), callback_data: `fr_${f.id}` }, { text: t(lang, 'delete'), callback_data: `fd_${f.id}` }]);
+  keyboard.inline_keyboard.push([{ text: t(lang, 'open_site'), web_app: { url: folderUrl(f.id) } }]);
+  keyboard.inline_keyboard.push([{ text: t(lang, 'all_folders'), callback_data: 'folders' }]);
+  return editMessage(chatId, messageId, text, keyboard);
+}
+
+async function showFolderPicker(chatId, lang, psalm, messageId = null, fresh = true) {
+  let folders;
+  try { folders = await getFolders(fresh); } catch (e) { return messageId ? editMessage(chatId, messageId, t(lang, 'folders_error')) : sendMessage(chatId, t(lang, 'folders_error')); }
+  const key = psalm.id;
+  const text = `${t(lang, 'choose_folder')} <b>${esc(psalm.collection.toUpperCase() + psalm.actualNumber)}</b> ${esc(psalm.title)}:\n\n<i>${t(lang, 'folders_intro')}</i>`;
+  const keyboard = { inline_keyboard: folders.slice(0, 40).map(f => [{ text: `${f.items.includes(key) ? '✅' : '▫️'} ${f.name}`, callback_data: `ft_${f.id}_${psalm.collection}_${psalm.actualNumber}` }]) };
+  keyboard.inline_keyboard.push([{ text: t(lang, 'new_folder'), callback_data: `fnp_${psalm.collection}_${psalm.actualNumber}` }]);
+  return messageId ? editMessage(chatId, messageId, text, keyboard) : sendMessage(chatId, text, keyboard);
+}
+
+// Replies to "write the folder name" prompts
+async function handlePendingInput(chatId, userId, lang, text) {
+  const st = userState[userId];
+  delete userState[userId];
+  const name = text.replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (!name) return sendMessage(chatId, t(lang, 'cancelled'));
+  try {
+    if (st.await === 'folder_name') {
+      const d = await folderApi('post', '', { name, items: st.add ? [st.add] : [] });
+      const kb = { inline_keyboard: [[{ text: `📁 ${name}`, callback_data: `fo_${d.created}` }], [{ text: t(lang, 'all_folders'), callback_data: 'folders' }]] };
+      return sendMessage(chatId, `${t(lang, 'folder_created')}: <b>${esc(name)}</b>`, kb);
+    }
+    if (st.await === 'folder_rename') {
+      await folderApi('patch', `/${encodeURIComponent(st.id)}`, { name });
+      const kb = { inline_keyboard: [[{ text: `📁 ${name}`, callback_data: `fo_${st.id}` }]] };
+      return sendMessage(chatId, `${t(lang, 'folder_renamed')}: <b>${esc(name)}</b>`, kb);
+    }
+  } catch (e) {
+    return sendMessage(chatId, `⚠️ ${esc(e.message)}`);
   }
 }
 
@@ -442,6 +646,13 @@ async function notifyAdminNewRequest(userId, user) {
 // ============================================================================
 // MESSAGE HANDLER
 // ============================================================================
+// Search queries are kept server-side: Telegram limits callback_data to 64 bytes.
+const savedQueries = {};
+function rememberQuery(userId, text) {
+  savedQueries[userId] = text;
+  return 'q';
+}
+
 async function handleMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from.id;
@@ -452,10 +663,19 @@ async function handleMessage(message) {
   }
   const lang = userLanguage[userId];
 
-  if (text.startsWith('/')) {
-    const command = text.split(' ')[0];
+  if (userState[userId]?.await) {
+    if (text.startsWith('/')) delete userState[userId];
+    else return handlePendingInput(chatId, userId, lang, text);
+  }
 
-    if (command === '/start') {
+  if (text.startsWith('/')) {
+    const command = text.split(' ')[0].split('@')[0];
+
+    if (command === '/cancel') {
+      await sendMessage(chatId, t(lang, 'cancelled'));
+    } else if (command === '/papki' || command === '/folders') {
+      await showFolders(chatId, lang);
+    } else if (command === '/start') {
       const user = accessData.users[userId];
       
       if (!user) {
@@ -479,8 +699,9 @@ async function handleMessage(message) {
 
         const keyboard = {
           inline_keyboard: [
+            [{ text: t(lang, 'open_app'), web_app: { url: MINIAPP_URL } }],
             [{ text: t(lang, 'all_collections'), callback_data: 'show_collections' }],
-            [{ text: t(lang, 'favorites'), callback_data: 'show_favorites' }],
+            [{ text: t(lang, 'folders'), callback_data: 'folders' }, { text: t(lang, 'favorites'), callback_data: 'show_favorites' }],
             [{ text: t(lang, 'language'), callback_data: 'select_language' }]
           ]
         };
@@ -515,16 +736,7 @@ async function handleMessage(message) {
       await sendMessage(chatId, t(lang, 'language'), keyboard);
     } else if (command === '/glavy') {
       // Alle Sammlungen direkt anzeigen
-      const collections = [
-        { name: collectionsData['п']?.name || 'Песни Юности', abbr: 'п', count: '1-1005' },
-        { name: collectionsData['к']?.name || 'Кувшинчик', abbr: 'к', count: '1-89' },
-
-        { name: collectionsData['г']?.name || 'Горлица', abbr: 'г', count: '1-571' },
-        { name: collectionsData['с']?.name || 'Псалмы Сиона', abbr: 'с', count: '1-525' },
-        { name: collectionsData['м']?.name || 'Мы поём Господу', abbr: 'м', count: '1-200' },
-        { name: collectionsData['юс']?.name || 'Мелодия юных сердец', abbr: 'юс', count: '1-850' },
-        { name: collectionsData['гх']?.name || 'Голосок хваления', abbr: 'гх', count: '1-393' }
-      ];
+      const collections = collectionsList();
 
       let text = `${t(lang, 'all_collections')}:\n\n`;
       const keyboard = {
@@ -550,16 +762,7 @@ async function handleMessage(message) {
     if (results && results.length > 0) {
       // Wenn nur 1 Ergebnis: direkt anzeigen
       if (results.length === 1) {
-        const psalm = results[0];
-        const formatted = formatPsalm(psalm.text);
-        const responseText = `<b>${psalm.collection}${psalm.actualNumber}</b>\n${psalm.title}\n\n${formatted}`;
-        const keyboard = {
-          inline_keyboard: [
-            [{ text: t(lang, 'favorite'), callback_data: `fav_${psalm.collection}_${psalm.actualNumber}` }],
-            [{ text: t(lang, 'new_search'), callback_data: 'new_search' }]
-          ]
-        };
-        await sendMessage(chatId, responseText, keyboard);
+        await showPsalm(chatId, userId, lang, results[0]);
       } else {
         // Mehrere Ergebnisse: Liste anzeigen
         let responseText = `${t(lang, 'results')}:\n\n`;
@@ -571,7 +774,7 @@ async function handleMessage(message) {
 
         if (results.length > 10) {
           keyboard.inline_keyboard.push([
-            { text: `➡️ +${results.length - 10} ${t(lang, 'more')}`, callback_data: `search_more_${encodeURIComponent(text)}_0` }
+            { text: `➡️ +${results.length - 10} ${t(lang, 'more')}`, callback_data: `search_more_${rememberQuery(userId, text)}_0` }
           ]);
         }
 
@@ -602,16 +805,7 @@ async function handleCallbackQuery(query) {
   const lang = userLanguage[userId];
 
   if (data === 'show_collections') {
-    const collections = [
-      { name: collectionsData['п']?.name || 'Песни Юности', abbr: 'п', count: '1-1005' },
-      { name: collectionsData['к']?.name || 'Кувшинчик', abbr: 'к', count: '1-89' },
-      { name: collectionsData['н']?.name || 'Новые псалмы', abbr: 'н', count: '1-217' },
-      { name: collectionsData['г']?.name || 'Горлица', abbr: 'г', count: '1-571' },
-      { name: collectionsData['с']?.name || 'Псалмы Сиона', abbr: 'с', count: '1-525' },
-      { name: collectionsData['м']?.name || 'Мы поём Господу', abbр: 'м', count: '1-200' },
-      { name: collectionsData['юс']?.name || 'Мелодия юных сердец', abbr: 'юс', count: '1-850' },
-      { name: collectionsData['гх']?.name || 'Голосок хваления', abbr: 'гх', count: '1-393' }
-    ];
+    const collections = collectionsList();
 
     let text = `${t(lang, 'all_collections')}:\n\n`;
     const keyboard = {
@@ -683,7 +877,7 @@ async function handleCallbackQuery(query) {
   } else if (data.startsWith('search_more_')) {
     // Pagination für Suchergebnisse
     const parts = data.replace('search_more_', '').split('_');
-    const searchQuery = decodeURIComponent(parts[0]);
+    const searchQuery = parts[0] === 'q' ? (savedQueries[userId] || '') : decodeURIComponent(parts[0]);
     const page = parseInt(parts[1]) || 0;
 
     const results = searchPsalm(searchQuery, null, lang);
@@ -705,13 +899,13 @@ async function handleCallbackQuery(query) {
 
     if (end < results.length) {
       keyboard.inline_keyboard.push([
-        { text: t(lang, 'next'), callback_data: `search_more_${encodeURIComponent(searchQuery)}_${page + 1}` }
+        { text: t(lang, 'next'), callback_data: `search_more_q_${page + 1}` }
       ]);
     }
 
     if (page > 0) {
       keyboard.inline_keyboard.push([
-        { text: t(lang, 'prev'), callback_data: `search_more_${encodeURIComponent(searchQuery)}_${page - 1}` }
+        { text: t(lang, 'prev'), callback_data: `search_more_q_${page - 1}` }
       ]);
     }
 
@@ -728,17 +922,7 @@ async function handleCallbackQuery(query) {
 
     const psalm = psalmsData.find(p => p.collection === collection && p.actualNumber === actualNumber);
     if (psalm) {
-      const isFav = isFavorite(userId, collection, actualNumber);
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: isFav ? t(lang, 'remove_favorite') : t(lang, 'add_favorite'), callback_data: `fav_${collection}_${actualNumber}` }
-          ],
-          [{ text: t(lang, 'new_search'), callback_data: 'new_search' }]
-        ]
-      };
-
-      await sendPsalm(chatId, psalm.text, keyboard, collection, actualNumber);
+      await showPsalm(chatId, userId, lang, psalm);
     }
   } else if (data.startsWith('fav_')) {
     const match = data.match(/^fav_(.+?)_(\d+)$/);
@@ -760,6 +944,12 @@ async function handleCallbackQuery(query) {
         text: t(lang, 'favorite_added'),
         show_alert: false
       });
+    }
+    const favPsalm = psalmByKey.get(`${collection}${actualNumber}`);
+    if (favPsalm) {
+      try {
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, { chat_id: chatId, message_id: messageId, reply_markup: psalmKeyboard(userId, lang, favPsalm) });
+      } catch (err) { /* message too old or unchanged */ }
     }
   } else if (data.startsWith('remove_fav_')) {
     const match = data.match(/^remove_fav_(.+?)_(\d+)$/);
@@ -813,11 +1003,61 @@ async function handleCallbackQuery(query) {
   } else if (data.startsWith('lang_')) {
     const newLang = data.replace('lang_', '');
     userLanguage[userId] = newLang;
+    savePrefs();
     await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
       callback_query_id: query.id,
       text: t(newLang, 'language_selected'),
       show_alert: false
     });
+  } else if (data === 'folders') {
+    await showFolders(chatId, lang, messageId);
+  } else if (data.startsWith('fo_')) {
+    await showFolder(chatId, lang, data.slice(3), messageId);
+  } else if (data === 'fn') {
+    userState[userId] = { await: 'folder_name' };
+    await sendMessage(chatId, t(lang, 'ask_folder_name'));
+  } else if (data.startsWith('fnp_')) {
+    const m = data.match(/^fnp_(.+?)_(\d+)$/);
+    if (m) {
+      userState[userId] = { await: 'folder_name', add: m[1] + m[2] };
+      await sendMessage(chatId, t(lang, 'ask_folder_name'));
+    }
+  } else if (data.startsWith('fr_')) {
+    userState[userId] = { await: 'folder_rename', id: data.slice(3) };
+    await sendMessage(chatId, t(lang, 'ask_rename'));
+  } else if (data.startsWith('fdy_')) {
+    try {
+      await folderApi('delete', `/${encodeURIComponent(data.slice(4))}`);
+      await editMessage(chatId, messageId, t(lang, 'folder_deleted'), { inline_keyboard: [[{ text: t(lang, 'all_folders'), callback_data: 'folders' }]] });
+    } catch (e) {
+      await answerCallback(query.id, e.message);
+    }
+  } else if (data.startsWith('fd_')) {
+    const id = data.slice(3);
+    await editMessage(chatId, messageId, t(lang, 'confirm_delete'), {
+      inline_keyboard: [[{ text: t(lang, 'yes_delete'), callback_data: `fdy_${id}` }, { text: t(lang, 'cancel'), callback_data: `fo_${id}` }]]
+    });
+  } else if (data.startsWith('fa_')) {
+    const m = data.match(/^fa_(.+?)_(\d+)$/);
+    const psalm = m && psalmByKey.get(m[1] + m[2]);
+    if (psalm) await showFolderPicker(chatId, lang, psalm);
+  } else if (data.startsWith('ft_')) {
+    const m = data.match(/^ft_(f-[a-z0-9]+)_(.+?)_(\d+)$/);
+    const psalm = m && psalmByKey.get(m[2] + m[3]);
+    if (psalm) {
+      try {
+        const folders = await getFolders(true);
+        const f = folders.find(x => x.id === m[1]);
+        if (!f) throw new Error('Папка не найдена');
+        const inside = f.items.includes(psalm.id);
+        if (inside) await folderApi('delete', `/${encodeURIComponent(f.id)}/items/${encodeURIComponent(psalm.id)}`);
+        else await folderApi('post', `/${encodeURIComponent(f.id)}/items`, { key: psalm.id });
+        await answerCallback(query.id, `${t(lang, inside ? 'removed_from' : 'added_to')} «${f.name}»`);
+        await showFolderPicker(chatId, lang, psalm, messageId, false);
+      } catch (e) {
+        await answerCallback(query.id, `⚠️ ${e.message}`);
+      }
+    }
   } else if (data === 'new_search') {
     const text = t(lang, 'search_placeholder');
     const keyboard = {
@@ -987,16 +1227,20 @@ app.get('/health', (req, res) => {
 
 app.post('/api/telegram/webhook', async (req, res) => {
   const update = req.body;
+  res.json({ ok: true }); // reply at once so Telegram does not resend slow updates
 
-  if (update.message) {
-    await handleMessage(update.message);
+  try {
+    if (update.message) {
+      await handleMessage(update.message);
+    }
+
+    if (update.callback_query) {
+      await handleCallbackQuery(update.callback_query);
+      await answerCallback(update.callback_query.id);
+    }
+  } catch (err) {
+    console.error('❌ Fehler bei der Verarbeitung:', err.message);
   }
-
-  if (update.callback_query) {
-    await handleCallbackQuery(update.callback_query);
-  }
-
-  res.json({ ok: true });
 });
 
 app.post('/api/validate-token', (req, res) => {
@@ -1120,6 +1364,23 @@ app.listen(PORT, async () => {
   loadPsalms();
   loadAccessData();
   loadFavorites();
+  loadPrefs();
+  console.log(`💾 Daten in ${path.resolve(DATA_DIR)}`);
+
+  try {
+    await axios.post(`${TELEGRAM_API}/setMyCommands`, {
+      commands: [
+        { command: 'start', description: 'Начало' },
+        { command: 'papki', description: 'Общие папки' },
+        { command: 'favorites', description: 'Избранное' },
+        { command: 'glavy', description: 'Все сборники' },
+        { command: 'help', description: 'Справка' },
+        { command: 'language', description: 'Язык' }
+      ]
+    });
+  } catch (err) {
+    console.error('❌ setMyCommands:', err.message);
+  }
 
   const webhookUrl = `https://bot-production-8b3a.up.railway.app/api/telegram/webhook`;
   try {
