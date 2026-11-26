@@ -135,12 +135,7 @@ function loadPsalms() {
     }));
     psalmByKey = new Map(psalmsData.map(p => [p.id, p]));
     console.log(`✅ ${psalmsData.length} Psalmen geladen`);
-    try {
-      const extendedData = JSON.parse(fs.readFileSync(path.join(__dirname, 'psalms-data-extended.json'), 'utf-8'));
-      collectionsData = Object.assign({}, DEFAULT_COLLECTIONS, extendedData.collections || {});
-    } catch (err) {
-      collectionsData = DEFAULT_COLLECTIONS;
-    }
+    collectionsData = DEFAULT_COLLECTIONS;
   } catch (err) {
     console.error('❌ Fehler beim Laden der Psalmen:', err.message);
     process.exit(1);
