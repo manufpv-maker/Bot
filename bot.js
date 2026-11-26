@@ -377,6 +377,24 @@ function hasAccess(userId) {
   return user && user.approved === true && !user.blocked;
 }
 
+function isAdmin(userId) {
+  return !!ADMIN_CHAT_ID && String(userId) === ADMIN_CHAT_ID;
+}
+
+// Psalms, collections, folders and search are only for approved users (and the admin).
+function canUseBot(userId) {
+  return isAdmin(userId) || hasAccess(userId);
+}
+
+// Admin API: the token must be set on the server and match (header or body); constant-time compare.
+function adminTokenOk(req) {
+  if (!ADMIN_TOKEN) return false;
+  const auth = String(req.headers['authorization'] || '');
+  const provided = String(req.headers['x-admin-token'] || (auth.startsWith('Bearer ') ? auth.slice(7) : '') || req.body?.adminToken || '').trim();
+  const a = Buffer.from(provided), b = Buffer.from(ADMIN_TOKEN);
+  return a.length === b.length && require('crypto').timingSafeEqual(a, b);
+}
+
 // ============================================================================
 // SUCHFUNKTION
 // ============================================================================
@@ -625,10 +643,12 @@ async function handlePendingInput(chatId, userId, lang, text) {
 async function notifyAdminNewRequest(userId, user) {
   if (!ADMIN_CHAT_ID) return;
 
+  const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'N/A';
   const text = `🔔 <b>Новая заявка на доступ</b>\n\n` +
-    `👤 <b>Имя:</b> ${user.first_name || 'N/A'}\n` +
-    `📱 <b>Username:</b> @${user.username || 'N/A'}\n` +
-    `🆔 <b>ID:</b> <code>${userId}</code>\n\n` +
+    `👤 <b>Имя:</b> ${esc(fullName)}\n` +
+    `📱 <b>Username:</b> ${user.username ? '@' + esc(user.username) : 'нет'}\n` +
+    `🆔 <b>ID:</b> <code>${userId}</code>\n` +
+    `🔗 <a href="tg://user?id=${userId}">Открыть профиль</a>\n\n` +
     `<b>Одобрить или отклонить:</b>`;
 
   const keyboard = {
@@ -663,6 +683,15 @@ async function handleMessage(message) {
   }
   const lang = userLanguage[userId];
 
+  const firstWord = text.split(' ')[0].split('@')[0];
+  if (!canUseBot(userId) && firstWord !== '/start') {
+    if (!accessData.users[userId]) {
+      // unknown user wrote something other than /start: treat it as an access request
+      return handleMessage(Object.assign({}, message, { text: '/start' }));
+    }
+    return sendMessage(chatId, t(lang, 'not_approved'));
+  }
+
   if (userState[userId]?.await) {
     if (text.startsWith('/')) delete userState[userId];
     else return handlePendingInput(chatId, userId, lang, text);
@@ -678,7 +707,7 @@ async function handleMessage(message) {
     } else if (command === '/start') {
       const user = accessData.users[userId];
       
-      if (!user) {
+      if (!user && !isAdmin(userId)) {
         accessData.users[userId] = {
           userId: userId,
           firstName: message.from.first_name || 'N/A',
@@ -692,7 +721,7 @@ async function handleMessage(message) {
         
         await sendMessage(chatId, t(lang, 'not_approved'));
         await notifyAdminNewRequest(userId, message.from);
-      } else if (!user.approved || user.blocked) {
+      } else if (!isAdmin(userId) && (!user.approved || user.blocked)) {
         await sendMessage(chatId, t(lang, 'not_approved'));
       } else {
         const helpText = `${t(lang, 'welcome')}\n\n${t(lang, 'search_help')}\n\n${t(lang, 'commands')}`;
@@ -746,7 +775,7 @@ async function handleMessage(message) {
       };
 
       await sendMessage(chatId, text, keyboard);
-    } else if (command === '/admin' && userId === parseInt(ADMIN_CHAT_ID)) {
+    } else if (command === '/admin' && isAdmin(userId)) {
       const keyboard = {
         inline_keyboard: [
           [{ text: t(lang, 'pending'), callback_data: 'admin_pending' }],
@@ -803,6 +832,13 @@ async function handleCallbackQuery(query) {
     userLanguage[userId] = 'ru';
   }
   const lang = userLanguage[userId];
+
+  const adminAction = /^(approve_|deny_|block_|unblock_|admin_)/.test(data);
+  if (adminAction && !isAdmin(userId)) return;
+  if (!adminAction && !canUseBot(userId) && !/^(lang_|select_language$)/.test(data)) {
+    await answerCallback(query.id, t(lang, 'not_approved'));
+    return;
+  }
 
   if (data === 'show_collections') {
     const collections = collectionsList();
@@ -1139,8 +1175,9 @@ async function handleCallbackQuery(query) {
       return;
     }
     
-    let text = `👤 <b>${user.firstName}</b>\n`;
-    text += `📱 @${user.username || 'N/A'}\n`;
+    let text = `👤 <b>${esc([user.firstName, user.lastName].filter(Boolean).join(' '))}</b>\n`;
+    text += `📱 ${user.username ? '@' + esc(user.username) : 'нет username'}\n`;
+    text += `🔗 <a href="tg://user?id=${adminUserId}">Открыть профиль</a>\n`;
     text += `🆔 ${adminUserId}\n\n`;
     text += `📊 Status: ${user.approved ? '✅ Одобрено' : '⏳ Ожидание'}${user.blocked ? ' | 🚫 Заблокировано' : ''}\n`;
     text += `📅 Запрос: ${new Date(user.requestedAt).toLocaleDateString('ru-RU')}`;
@@ -1248,16 +1285,19 @@ app.post('/api/validate-token', (req, res) => {
 });
 
 app.get('/api/admin/pending', (req, res) => {
+  if (!adminTokenOk(req)) return res.status(403).json({ error: 'Ungültiger Admin-Token' });
   const pending = Object.values(accessData.users).filter(u => !u.approved && !u.blocked);
   res.json({ pending });
 });
 
 app.get('/api/admin/approved', (req, res) => {
+  if (!adminTokenOk(req)) return res.status(403).json({ error: 'Ungültiger Admin-Token' });
   const approved = Object.values(accessData.users).filter(u => u.approved && !u.blocked);
   res.json({ approved });
 });
 
 app.get('/api/admin/stats', (req, res) => {
+  if (!adminTokenOk(req)) return res.status(403).json({ error: 'Ungültiger Admin-Token' });
   const total = Object.keys(accessData.users).length;
   const approvedCount = Object.values(accessData.users).filter(u => u.approved && !u.blocked).length;
   const pendingCount = Object.values(accessData.users).filter(u => !u.approved && !u.blocked).length;
@@ -1269,10 +1309,7 @@ app.get('/api/admin/stats', (req, res) => {
 app.post('/api/admin/approve', (req, res) => {
   const { userId, adminToken } = req.body;
 
-  const envToken = ADMIN_TOKEN;
-  const providedToken = adminToken ? String(adminToken).trim() : '';
-
-  if (providedToken !== envToken) {
+  if (!adminTokenOk(req)) {
     return res.status(403).json({ error: 'Ungültiger Admin-Token' });
   }
 
@@ -1305,10 +1342,7 @@ app.post('/api/admin/approve', (req, res) => {
 app.post('/api/admin/deny', (req, res) => {
   const { userId, adminToken } = req.body;
 
-  const envToken = ADMIN_TOKEN;
-  const providedToken = adminToken ? String(adminToken).trim() : '';
-
-  if (providedToken !== envToken) {
+  if (!adminTokenOk(req)) {
     return res.status(403).json({ error: 'Ungültiger Admin-Token' });
   }
 
@@ -1332,10 +1366,7 @@ app.post('/api/admin/deny', (req, res) => {
 app.post('/api/admin/block', (req, res) => {
   const { userId, adminToken } = req.body;
 
-  const envToken = ADMIN_TOKEN;
-  const providedToken = adminToken ? String(adminToken).trim() : '';
-
-  if (providedToken !== envToken) {
+  if (!adminTokenOk(req)) {
     return res.status(403).json({ error: 'Ungültiger Admin-Token' });
   }
 
